@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   Send, FileText, Bot, User, Paperclip, Sparkles, Loader2, 
-  LogOut, Lock, Mail, ArrowRight 
+  LogOut, Lock, Mail, ArrowRight, UserCheck 
 } from 'lucide-react';
 import { apiClient } from './api/client';
 
@@ -13,19 +13,21 @@ interface Message {
 }
 
 export default function App() {
-  // Состояния авторизации
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  
+  // Поля авторизации
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // Состояния чата
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       sender: 'ai',
-      text: 'Привет! Я Sahra AI. Чем могу помочь сегодня? Задай вопрос или загрузи документ для анализа.',
+      text: 'Привет! Я Sahra AI. Чем могу помочь?',
     },
   ]);
   const [input, setInput] = useState('');
@@ -41,15 +43,22 @@ export default function App() {
 
     try {
       if (authMode === 'register') {
-        await apiClient.post('/auth/register', { email, password });
+        // Регистрация со всеми требуемыми полями
+        await apiClient.post('/auth/register', { 
+          email, 
+          password,
+          first_name: firstName || 'User',
+          last_name: lastName || 'Sahra'
+        });
         setAuthMode('login');
       }
 
-      const formData = new URLSearchParams();
-      formData.append('username', email);
-      formData.append('password', password);
+      // Логин (OAuth2 Form Data)
+      const params = new URLSearchParams();
+      params.append('username', email);
+      params.append('password', password);
 
-      const res = await apiClient.post('/auth/login', formData, {
+      const res = await apiClient.post('/auth/login', params, {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });
 
@@ -57,7 +66,13 @@ export default function App() {
       localStorage.setItem('token', accessToken);
       setToken(accessToken);
     } catch (err: any) {
-      setAuthError(err.response?.data?.detail || 'Ошибка авторизации. Проверьте данные.');
+      console.error("Auth error:", err.response?.data);
+      const detail = err.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        setAuthError(detail[0]?.msg || 'Ошибка заполнения полей');
+      } else {
+        setAuthError(detail || 'Ошибка авторизации. Проверь данные.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -68,7 +83,7 @@ export default function App() {
     setToken(null);
   };
 
-  // Загрузка файла
+  // Загрузка документа
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return;
     const file = e.target.files[0];
@@ -89,17 +104,17 @@ export default function App() {
         {
           id: Date.now().toString(),
           sender: 'ai',
-          text: `Документ "${res.data.filename || file.name}" проанализирован! Теперь вы можете задавать по нему вопросы.`,
+          text: `Документ "${res.data.filename || file.name}" загружен! Задай по нему любой вопрос.`,
         },
       ]);
     } catch (err) {
-      alert('Не удалось загрузить документ. Проверьте авторизацию.');
+      alert('Ошибка при загрузке файла');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Отправка запросов
+  // Отправка сообщений
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
@@ -117,35 +132,42 @@ export default function App() {
 
     try {
       if (mode === 'document' && selectedFile) {
+        // POST /documents/ask
         const res = await apiClient.post('/documents/ask', {
           question: currentQuery,
           filename: selectedFile.name,
         });
 
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: (Date.now() + 1).toString(),
-            sender: 'ai',
-            text: res.data.answer,
-            sources: res.data.sources,
-          },
-        ]);
-      } else {
-        const res = await apiClient.post('/search/ask', {
-          query: currentQuery,
-        });
+        const replyText = res.data.answer || res.data.response || res.data.message || 'Ответ получен.';
 
         setMessages((prev) => [
           ...prev,
           {
             id: (Date.now() + 1).toString(),
             sender: 'ai',
-            text: res.data.answer || res.data.response || 'Ответ получен.',
+            text: replyText,
+            sources: res.data.sources,
+          },
+        ]);
+      } else {
+        // POST /search/  <--- ТОЧНЫЙ ЭНДПОИНТ ДЛЯ ЧАТА ИЗ ТВОЕГО SWAGGER!
+        const res = await apiClient.post('/search/', {
+          query: currentQuery,
+        });
+
+        const replyText = res.data.answer || res.data.response || res.data.result || res.data.message || JSON.stringify(res.data);
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            sender: 'ai',
+            text: typeof replyText === 'string' ? replyText : JSON.stringify(replyText),
           },
         ]);
       }
     } catch (error: any) {
+      console.error("Chat error:", error.response?.data);
       if (error.response?.status === 401) {
         handleLogout();
       } else {
@@ -154,7 +176,7 @@ export default function App() {
           {
             id: (Date.now() + 1).toString(),
             sender: 'ai',
-            text: 'Произошла ошибка при обработке запроса сервером.',
+            text: `Ошибка сервера (${error.response?.status || '500'}). Проверь логи контейнера.`,
           },
         ]);
       }
@@ -163,7 +185,7 @@ export default function App() {
     }
   };
 
-  // Экран Авторизации
+  // ЭКРАН ВХОДА / РЕГИСТРАЦИИ
   if (!token) {
     return (
       <div className="flex h-screen items-center justify-center bg-slate-950 text-slate-100 p-4 font-sans">
@@ -182,11 +204,6 @@ export default function App() {
           <h2 className="text-xl font-semibold text-center mb-2">
             {authMode === 'login' ? 'С возвращением' : 'Создать аккаунт'}
           </h2>
-          <p className="text-xs text-slate-400 text-center mb-6">
-            {authMode === 'login' 
-              ? 'Введите данные для входа в сервис' 
-              : 'Зарегистрируйтесь для работы с ИИ ассистентом'}
-          </p>
 
           {authError && (
             <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-xl text-center">
@@ -195,32 +212,54 @@ export default function App() {
           )}
 
           <form onSubmit={handleAuth} className="space-y-4">
-            <div>
-              <div className="relative">
-                <Mail className="w-5 h-5 absolute left-4 top-3.5 text-slate-500" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Email адрес"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
-                />
+            {authMode === 'register' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="relative">
+                  <UserCheck className="w-5 h-5 absolute left-4 top-3.5 text-slate-500" />
+                  <input
+                    type="text"
+                    required
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    placeholder="Имя"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+                  />
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    placeholder="Фамилия"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+                  />
+                </div>
               </div>
+            )}
+
+            <div className="relative">
+              <Mail className="w-5 h-5 absolute left-4 top-3.5 text-slate-500" />
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email адрес"
+                className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+              />
             </div>
 
-            <div>
-              <div className="relative">
-                <Lock className="w-5 h-5 absolute left-4 top-3.5 text-slate-500" />
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Пароль"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
-                />
-              </div>
+            <div className="relative">
+              <Lock className="w-5 h-5 absolute left-4 top-3.5 text-slate-500" />
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Пароль"
+                className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+              />
             </div>
 
             <button
@@ -247,9 +286,7 @@ export default function App() {
               }}
               className="text-xs text-indigo-400 hover:underline transition cursor-pointer"
             >
-              {authMode === 'login' 
-                ? 'Нет аккаунта? Зарегистрироваться' 
-                : 'Уже есть аккаунт? Войти'}
+              {authMode === 'login' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
             </button>
           </div>
         </div>
@@ -257,10 +294,9 @@ export default function App() {
     );
   }
 
-  // Экран Рабочего Интерфейса ЧАТА
+  // ЭКРАН ЧАТА
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 font-sans">
-      {/* Боковая панель */}
       <aside className="w-64 bg-slate-900 border-r border-slate-800 p-4 flex flex-col justify-between hidden md:flex">
         <div>
           <div className="flex items-center gap-3 mb-8">
@@ -280,7 +316,7 @@ export default function App() {
               }`}
             >
               <Bot className="w-5 h-5" />
-              <span>Общий Чат</span>
+              <span>Общий ИИ Поиск</span>
             </button>
 
             <button
@@ -296,7 +332,6 @@ export default function App() {
         </div>
 
         <div className="space-y-4">
-          {/* Загрузка файла */}
           <div className="p-4 bg-slate-800/50 border border-slate-700/50 rounded-2xl">
             <label className="flex flex-col items-center gap-2 cursor-pointer">
               <Paperclip className="w-6 h-6 text-indigo-400" />
@@ -307,7 +342,6 @@ export default function App() {
             </label>
           </div>
 
-          {/* Выход */}
           <button
             onClick={handleLogout}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
@@ -318,19 +352,16 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Основная зона */}
       <main className="flex-1 flex flex-col h-full bg-slate-950">
-        {/* Шапка */}
         <header className="h-16 border-b border-slate-800/80 px-6 flex items-center justify-between bg-slate-900/50 backdrop-blur-md">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
             <span className="text-sm font-medium text-slate-300">
-              Режим: {mode === 'chat' ? 'Общий ИИ Поиск' : `Документ (${selectedFile?.name || 'не выбран'})`}
+              Режим: {mode === 'chat' ? 'Общий ИИ Поиск (/search/)' : `Документ (${selectedFile?.name || 'не выбран'})`}
             </span>
           </div>
         </header>
 
-        {/* Сообщения */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {messages.map((msg) => (
             <div
@@ -372,7 +403,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Ввод */}
         <footer className="p-4 border-t border-slate-800/80 bg-slate-900/30">
           <form onSubmit={handleSend} className="max-w-4xl mx-auto flex gap-3">
             <input
