@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
-import { Send, FileText, Bot, User, Paperclip, Sparkles, Loader2 } from 'lucide-react';
+import { 
+  Send, FileText, Bot, User, Paperclip, Sparkles, Loader2, 
+  LogOut, Lock, Mail, ArrowRight 
+} from 'lucide-react';
 import { apiClient } from './api/client';
 
 interface Message {
@@ -10,11 +13,19 @@ interface Message {
 }
 
 export default function App() {
+  // Состояния авторизации
+  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+
+  // Состояния чата
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       sender: 'ai',
-      text: 'Привет! Я Sahra AI. Чем могу помочь сегодня? Можешь просто пообщаться со мной или загрузить документ для анализа.',
+      text: 'Привет! Я Sahra AI. Чем могу помочь сегодня? Задай вопрос или загрузи документ для анализа.',
     },
   ]);
   const [input, setInput] = useState('');
@@ -22,7 +33,42 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [mode, setMode] = useState<'chat' | 'document'>('chat');
 
-  // Обработка загрузки файла
+  // Авторизация / Регистрация
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setIsLoading(true);
+
+    try {
+      if (authMode === 'register') {
+        await apiClient.post('/auth/register', { email, password });
+        setAuthMode('login');
+      }
+
+      const formData = new URLSearchParams();
+      formData.append('username', email);
+      formData.append('password', password);
+
+      const res = await apiClient.post('/auth/login', formData, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+
+      const accessToken = res.data.access_token;
+      localStorage.setItem('token', accessToken);
+      setToken(accessToken);
+    } catch (err: any) {
+      setAuthError(err.response?.data?.detail || 'Ошибка авторизации. Проверьте данные.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    setToken(null);
+  };
+
+  // Загрузка файла
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return;
     const file = e.target.files[0];
@@ -43,17 +89,17 @@ export default function App() {
         {
           id: Date.now().toString(),
           sender: 'ai',
-          text: `Документ "${res.data.filename || file.name}" успешно проанализирован и сохранен в базу! Теперь ты можешь задавать по нему любые вопросы.`,
+          text: `Документ "${res.data.filename || file.name}" проанализирован! Теперь вы можете задавать по нему вопросы.`,
         },
       ]);
     } catch (err) {
-      alert('Ошибка при загрузке файла');
+      alert('Не удалось загрузить документ. Проверьте авторизацию.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Отправка сообщения
+  // Отправка запросов
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
@@ -71,7 +117,6 @@ export default function App() {
 
     try {
       if (mode === 'document' && selectedFile) {
-        // Запрос к RAG (по документам)
         const res = await apiClient.post('/documents/ask', {
           question: currentQuery,
           filename: selectedFile.name,
@@ -87,7 +132,6 @@ export default function App() {
           },
         ]);
       } else {
-        // Обычный чат с Ollama (ИИ Поиск)
         const res = await apiClient.post('/search/ask', {
           query: currentQuery,
         });
@@ -97,27 +141,126 @@ export default function App() {
           {
             id: (Date.now() + 1).toString(),
             sender: 'ai',
-            text: res.data.answer || res.data.response || 'Ошибка получения ответа',
+            text: res.data.answer || res.data.response || 'Ответ получен.',
           },
         ]);
       }
-    } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          sender: 'ai',
-          text: 'Не удалось получить ответ от сервера. Проверь подключение.',
-        },
-      ]);
+    } catch (error: any) {
+      if (error.response?.status === 401) {
+        handleLogout();
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            sender: 'ai',
+            text: 'Произошла ошибка при обработке запроса сервером.',
+          },
+        ]);
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Экран Авторизации
+  if (!token) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-950 text-slate-100 p-4 font-sans">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl relative overflow-hidden">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 via-cyan-500 to-emerald-500"></div>
+
+          <div className="flex items-center justify-center gap-3 mb-6">
+            <div className="p-3 bg-indigo-600 rounded-2xl shadow-lg shadow-indigo-500/30">
+              <Sparkles className="w-8 h-8 text-white" />
+            </div>
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
+              Sahra AI
+            </h1>
+          </div>
+
+          <h2 className="text-xl font-semibold text-center mb-2">
+            {authMode === 'login' ? 'С возвращением' : 'Создать аккаунт'}
+          </h2>
+          <p className="text-xs text-slate-400 text-center mb-6">
+            {authMode === 'login' 
+              ? 'Введите данные для входа в сервис' 
+              : 'Зарегистрируйтесь для работы с ИИ ассистентом'}
+          </p>
+
+          {authError && (
+            <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-xl text-center">
+              {authError}
+            </div>
+          )}
+
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div>
+              <div className="relative">
+                <Mail className="w-5 h-5 absolute left-4 top-3.5 text-slate-500" />
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Email адрес"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="relative">
+                <Lock className="w-5 h-5 absolute left-4 top-3.5 text-slate-500" />
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Пароль"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium py-3.5 rounded-2xl transition shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {isLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <>
+                  <span>{authMode === 'login' ? 'Войти' : 'Зарегистрироваться'}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center">
+            <button
+              onClick={() => {
+                setAuthMode(authMode === 'login' ? 'register' : 'login');
+                setAuthError('');
+              }}
+              className="text-xs text-indigo-400 hover:underline transition cursor-pointer"
+            >
+              {authMode === 'login' 
+                ? 'Нет аккаунта? Зарегистрироваться' 
+                : 'Уже есть аккаунт? Войти'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Экран Рабочего Интерфейса ЧАТА
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 font-sans">
-      {/* Сайдбар */}
+      {/* Боковая панель */}
       <aside className="w-64 bg-slate-900 border-r border-slate-800 p-4 flex flex-col justify-between hidden md:flex">
         <div>
           <div className="flex items-center gap-3 mb-8">
@@ -132,17 +275,17 @@ export default function App() {
           <nav className="space-y-2">
             <button
               onClick={() => setMode('chat')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition cursor-pointer ${
                 mode === 'chat' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'
               }`}
             >
               <Bot className="w-5 h-5" />
-              <span>Обычный Чат</span>
+              <span>Общий Чат</span>
             </button>
 
             <button
               onClick={() => setMode('document')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition cursor-pointer ${
                 mode === 'document' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'
               }`}
             >
@@ -152,21 +295,32 @@ export default function App() {
           </nav>
         </div>
 
-        {/* Загрузка файла */}
-        <div className="p-4 bg-slate-800/50 border border-slate-700/50 rounded-2xl">
-          <label className="flex flex-col items-center gap-2 cursor-pointer">
-            <Paperclip className="w-6 h-6 text-indigo-400" />
-            <span className="text-xs text-slate-300 font-medium text-center">
-              {selectedFile ? selectedFile.name : 'Загрузить документ'}
-            </span>
-            <input type="file" onChange={handleFileUpload} className="hidden" accept=".pdf,.txt,.docx" />
-          </label>
+        <div className="space-y-4">
+          {/* Загрузка файла */}
+          <div className="p-4 bg-slate-800/50 border border-slate-700/50 rounded-2xl">
+            <label className="flex flex-col items-center gap-2 cursor-pointer">
+              <Paperclip className="w-6 h-6 text-indigo-400" />
+              <span className="text-xs text-slate-300 font-medium text-center truncate max-w-full">
+                {selectedFile ? selectedFile.name : 'Прикрепить документ'}
+              </span>
+              <input type="file" onChange={handleFileUpload} className="hidden" accept=".pdf,.txt,.docx" />
+            </label>
+          </div>
+
+          {/* Выход */}
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+          >
+            <LogOut className="w-5 h-5" />
+            <span className="text-sm font-medium">Выйти</span>
+          </button>
         </div>
       </aside>
 
-      {/* Основная зона чата */}
+      {/* Основная зона */}
       <main className="flex-1 flex flex-col h-full bg-slate-950">
-        {/* Хедер */}
+        {/* Шапка */}
         <header className="h-16 border-b border-slate-800/80 px-6 flex items-center justify-between bg-slate-900/50 backdrop-blur-md">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -213,12 +367,12 @@ export default function App() {
           {isLoading && (
             <div className="flex gap-4 items-center text-slate-400 text-sm">
               <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
-              <span>Sahra AI думает...</span>
+              <span>Sahra AI генерирует ответ...</span>
             </div>
           )}
         </div>
 
-        {/* Форма ввода */}
+        {/* Ввод */}
         <footer className="p-4 border-t border-slate-800/80 bg-slate-900/30">
           <form onSubmit={handleSend} className="max-w-4xl mx-auto flex gap-3">
             <input
@@ -233,7 +387,7 @@ export default function App() {
             <button
               type="submit"
               disabled={isLoading || !input.trim()}
-              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white p-3.5 rounded-2xl transition shadow-lg shadow-indigo-600/20"
+              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white p-3.5 rounded-2xl transition shadow-lg shadow-indigo-600/20 cursor-pointer"
             >
               <Send className="w-5 h-5" />
             </button>
